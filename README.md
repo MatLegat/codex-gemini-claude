@@ -1,4 +1,4 @@
-# codex-claude
+# codex-gemini-claude
 
 A Claude Code plugin that shows how much context and usage **Claude** and **Codex** are using, side by side, in a band just above the prompt.
 
@@ -39,7 +39,7 @@ The terminal draws no images, so there the rings and bars become text (`✻ 25%`
 In Claude Code:
 
 ```
-/plugin install codex-claude --marketplace MatLegat/codex-claude
+/plugin install codex-gemini-claude --marketplace MatLegat/codex-gemini-claude
 ```
 
 ### Requirements
@@ -58,7 +58,7 @@ The plugin has one option, **Band layout** (`layout`). Set it in the plugin's se
 ```json
 {
   "pluginConfigs": {
-    "codex-claude": { "options": { "layout": "models" } }
+    "codex-gemini-claude": { "options": { "layout": "models" } }
   }
 }
 ```
@@ -72,7 +72,7 @@ The plugin has one option, **Band layout** (`layout`). Set it in the plugin's se
 ## How it works
 
 - **Claude's figures** come from Claude Code itself: the session's context and its rate limits.
-- **Codex's figures** come from two scripts in [`codex-claude/scripts`](codex-claude/scripts):
+- **Codex's figures** come from two scripts in [`codex-gemini-claude/scripts`](codex-gemini-claude/scripts):
   - `context-codex.py` reads the context of the session's Codex thread, and whether a Codex job is running, from `~/.codex/sessions` and the Codex plugin's job records.
   - `usage-codex.py` reads the 5-hour and weekly limits from `codex app-server`. If that fails, it falls back to the latest Codex session log.
 
@@ -81,8 +81,8 @@ Codex context refreshes every minute, and every 3 seconds while Codex is working
 ## Development
 
 ```
-claude plugin test codex-claude
-claude plugin validate codex-claude
+claude plugin test codex-gemini-claude
+claude plugin validate codex-gemini-claude
 ```
 
-Most look-and-feel choices, such as colors, ring and bar sizes, and line widths, are constants at the top of [`codex-claude/hooks/register.tsx`](codex-claude/hooks/register.tsx).
+Most look-and-feel choices, such as colors, ring and bar sizes, and line widths, are constants at the top of [`codex-gemini-claude/hooks/register.tsx`](codex-gemini-claude/hooks/register.tsx).

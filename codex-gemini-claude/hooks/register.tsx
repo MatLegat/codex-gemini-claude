@@ -7,23 +7,23 @@ const PANE = 'context-all'
 const CODEX_REFRESH_MS = 60_000
 const CODEX_USAGE_REFRESH_MS = 5 * 60_000
 
-const claude = atom({ plugin: 'codex-claude', key: 'claude' } as const, null, {
+const claude = atom({ plugin: 'codex-gemini-claude', key: 'claude' } as const, null, {
   shape: 'claude-1',
 })
-const codex = atom({ plugin: 'codex-claude', key: 'codex' } as const, null, {
+const codex = atom({ plugin: 'codex-gemini-claude', key: 'codex' } as const, null, {
   shape: 'codex-1',
 })
-const isClaudeOpen = atom({ plugin: 'codex-claude', key: 'isClaudeOpen' } as const, false)
-const isCodexOpen = atom({ plugin: 'codex-claude', key: 'isCodexOpen' } as const, false)
-const claudeUsage = atom({ plugin: 'codex-claude', key: 'claudeUsage' } as const, null, {
+const isClaudeOpen = atom({ plugin: 'codex-gemini-claude', key: 'isClaudeOpen' } as const, false)
+const isCodexOpen = atom({ plugin: 'codex-gemini-claude', key: 'isCodexOpen' } as const, false)
+const claudeUsage = atom({ plugin: 'codex-gemini-claude', key: 'claudeUsage' } as const, null, {
   shape: 'usage-1',
 })
-const codexUsage = atom({ plugin: 'codex-claude', key: 'codexUsage' } as const, null, {
+const codexUsage = atom({ plugin: 'codex-gemini-claude', key: 'codexUsage' } as const, null, {
   shape: 'usage-1',
 })
-const isClaudeUsageOpen = atom({ plugin: 'codex-claude', key: 'isClaudeUsageOpen' } as const, false)
-const isCodexUsageOpen = atom({ plugin: 'codex-claude', key: 'isCodexUsageOpen' } as const, false)
-const claudeUsageSeenAt = atom({ plugin: 'codex-claude', key: 'claudeUsageSeenAt' } as const, null)
+const isClaudeUsageOpen = atom({ plugin: 'codex-gemini-claude', key: 'isClaudeUsageOpen' } as const, false)
+const isCodexUsageOpen = atom({ plugin: 'codex-gemini-claude', key: 'isCodexUsageOpen' } as const, false)
+const claudeUsageSeenAt = atom({ plugin: 'codex-gemini-claude', key: 'claudeUsageSeenAt' } as const, null)
 
 // The last Claude reading is kept in the store, so a session with no reading yet
 // (no response so far) shows the latest one any session saw.
@@ -34,7 +34,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 // The host's UTC offset in minutes, from `date +%z`: the mod's own environment
 // may not know the person's time zone.
-const tzOffset = atom({ plugin: 'codex-claude', key: 'tzOffset' } as const, null)
+const tzOffset = atom({ plugin: 'codex-gemini-claude', key: 'tzOffset' } as const, null)
 
 const WINDOW_NAMES: Record<string, string> = { five_hour: '5h', seven_day: 'Weekly' }
 
@@ -60,17 +60,17 @@ const STARTS_CODEX_JOB = /codex-companion\.mjs"?\s+(task|review|adversarial-revi
 // be registered yet (a background start returns before it is).
 const CODEX_START_GRACE_MS = 20_000
 
-const claudeBusy = atom({ plugin: 'codex-claude', key: 'claudeBusy' } as const, false)
-const codexBusy = atom({ plugin: 'codex-claude', key: 'codexBusy' } as const, false)
-const frame = atom({ plugin: 'codex-claude', key: 'frame' } as const, 0)
+const claudeBusy = atom({ plugin: 'codex-gemini-claude', key: 'claudeBusy' } as const, false)
+const codexBusy = atom({ plugin: 'codex-gemini-claude', key: 'codexBusy' } as const, false)
+const frame = atom({ plugin: 'codex-gemini-claude', key: 'frame' } as const, 0)
 // VS Code draws each Svg as an image; one drawn while its window was in the background (a mod
 // reload, say) can stay as its alt text. A new source makes it load again, so there the band
 // redraws every IMAGE_REFRESH_MS with this number in each image's markup.
 const IMAGE_REFRESH_MS = 30_000
-const imageEpoch = atom({ plugin: 'codex-claude', key: 'imageEpoch' } as const, 0)
+const imageEpoch = atom({ plugin: 'codex-gemini-claude', key: 'imageEpoch' } as const, 0)
 // Bumped once a minute: the band reads it, so the rings' time to reset stays current.
 const MINUTE_MS = 60_000
-const minuteTick = atom({ plugin: 'codex-claude', key: 'minuteTick' } as const, 0)
+const minuteTick = atom({ plugin: 'codex-gemini-claude', key: 'minuteTick' } as const, 0)
 
 function claudeIcon(isBusy: boolean, n: number): string {
   return isBusy ? (CLAUDE_FRAMES[n % CLAUDE_FRAMES.length] ?? CLAUDE_ICON) : CLAUDE_ICON
@@ -93,7 +93,7 @@ const SPINNER_WIDTH = 3
 // An idle indicator's gray.
 const IDLE_COLOR = '#5C5C5C'
 
-// The band's layout, the `layout` option (/config → codex-claude, or pluginConfigs in
+// The band's layout, the `layout` option (/config → codex-gemini-claude, or pluginConfigs in
 // settings). 'models', the default: one mirrored row, Claude's marks at the left, Codex's
 // at the right, a `+` / `-` button between opening every detail above it. 'rings': a
 // `Context` / `Usage` button per row opening both models' details, then the two marks.

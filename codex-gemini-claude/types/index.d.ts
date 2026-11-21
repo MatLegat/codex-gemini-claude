@@ -23,7 +23,7 @@ export type UsageWindow = { name: string; percent: number; resetsAt?: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'codex-claude': {
+    'codex-gemini-claude': {
       claude: Shaped<ClaudeContext | null>
       codex: Shaped<CodexContext | null>
       isClaudeOpen: boolean

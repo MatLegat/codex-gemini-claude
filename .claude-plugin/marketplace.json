@@ -1,5 +1,5 @@
 {
-  "name": "local-mods",
+  "name": "codex-gemini-claude",
   "owner": { "name": "Matteus Legat" },
-  "plugins": [{ "name": "codex-claude", "source": "./codex-claude" }]
+  "plugins": [{ "name": "codex-gemini-claude", "source": "./codex-gemini-claude" }]
 }

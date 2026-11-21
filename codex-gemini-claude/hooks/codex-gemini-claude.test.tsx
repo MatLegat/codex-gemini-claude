@@ -69,7 +69,7 @@ function runResult(stdout: string) {
 }
 
 const BAND = {
-  plugin: 'codex-claude',
+  plugin: 'codex-gemini-claude',
   component: 'AbovePrompt',
   requestId: 'above-prompt',
   props: {
@@ -84,7 +84,7 @@ const BAND = {
 } as const
 
 const PANE = {
-  plugin: 'codex-claude',
+  plugin: 'codex-gemini-claude',
   component: 'Pane',
   requestId: 'context-all',
   props: {

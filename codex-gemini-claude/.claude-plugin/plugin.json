@@ -1,5 +1,5 @@
 {
-  "name": "codex-claude",
+  "name": "codex-gemini-claude",
   "version": "0.49.0",
   "description": "Shows Claude and Codex context usage side by side above the prompt, and in a /context-all pane",
   "types": "./types/index.d.ts",
