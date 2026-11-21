@@ -1,3 +1,4 @@
 .DS_Store
 # Types the engine writes when it loads the mod
 codex-gemini-claude/.claude-plugin/types/
+__pycache__/

@@ -18,6 +18,17 @@ export type CodexContext =
     }
   | { error: string }
 
+// The Gemini conversation this Claude session started, read over `agy acp`.
+export type GeminiContext =
+  | {
+      conversation: string
+      tokens: number
+      window: number
+      percent: number
+      updatedAt: number
+    }
+  | { error: string }
+
 // One rate-limit window: `5h`, `Weekly`, ...; resetsAt in epoch milliseconds.
 export type UsageWindow = { name: string; percent: number; resetsAt?: number }
 
@@ -26,6 +37,12 @@ declare module 'claude-code' {
     'codex-gemini-claude': {
       claude: Shaped<ClaudeContext | null>
       codex: Shaped<CodexContext | null>
+      gemini: Shaped<GeminiContext | null>
+      isGeminiOpen: boolean
+      isGeminiUsageOpen: boolean
+      geminiUsage: Shaped<UsageWindow[] | null>
+      geminiBusy: boolean
+      geminiSince: number | null
       isClaudeOpen: boolean
       isCodexOpen: boolean
       claudeUsage: Shaped<UsageWindow[] | null>

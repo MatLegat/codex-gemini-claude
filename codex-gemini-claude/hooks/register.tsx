@@ -1,11 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { ClaudeContext, CodexContext, UsageWindow } from '../types'
+import type { ClaudeContext, CodexContext, GeminiContext, UsageWindow } from '../types'
 
 const PANE = 'context-all'
 const CODEX_REFRESH_MS = 60_000
 const CODEX_USAGE_REFRESH_MS = 5 * 60_000
+const GEMINI_REFRESH_MS = 60_000
+// `agy -p /usage` starts the CLI and asks Google: often enough to stay current, not more.
+const GEMINI_USAGE_REFRESH_MS = 2 * 60_000
 
 const claude = atom({ plugin: 'codex-gemini-claude', key: 'claude' } as const, null, {
   shape: 'claude-1',
@@ -24,6 +27,17 @@ const codexUsage = atom({ plugin: 'codex-gemini-claude', key: 'codexUsage' } as 
 const isClaudeUsageOpen = atom({ plugin: 'codex-gemini-claude', key: 'isClaudeUsageOpen' } as const, false)
 const isCodexUsageOpen = atom({ plugin: 'codex-gemini-claude', key: 'isCodexUsageOpen' } as const, false)
 const claudeUsageSeenAt = atom({ plugin: 'codex-gemini-claude', key: 'claudeUsageSeenAt' } as const, null)
+const gemini = atom({ plugin: 'codex-gemini-claude', key: 'gemini' } as const, null, {
+  shape: 'gemini-1',
+})
+const geminiUsage = atom({ plugin: 'codex-gemini-claude', key: 'geminiUsage' } as const, null, {
+  shape: 'usage-1',
+})
+const isGeminiOpen = atom({ plugin: 'codex-gemini-claude', key: 'isGeminiOpen' } as const, false)
+const isGeminiUsageOpen = atom({ plugin: 'codex-gemini-claude', key: 'isGeminiUsageOpen' } as const, false)
+// When this Claude session last started Gemini (epoch ms): its conversation is the newest one
+// written since. Kept in the session's state, so a reload of the mod keeps it.
+const geminiSince = atom({ plugin: 'codex-gemini-claude', key: 'geminiSince' } as const, null)
 
 // The last Claude reading is kept in the store, so a session with no reading yet
 // (no response so far) shows the latest one any session saw.
@@ -46,12 +60,15 @@ const CLAUDE_ICON = '✻'
 const CLAUDE_COLOR = '#D97757'
 const CODEX_ICON = '❂'
 const CODEX_COLOR = '#10A39F'
+const GEMINI_ICON = '✦'
+const GEMINI_COLOR = '#3487FF'
 
 // While a model works its icon animates: Claude cycles Claude Code's spinner
 // glyphs; Codex cycles its stand-in glyphs. One frame per tick.
 const FRAME_MS = 250
 const CLAUDE_FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 const CODEX_GLYPHS = ['֍', '⌬', '❂', '⬡', '⎔', '✺', '❁', '◎']
+const GEMINI_GLYPHS = ['✦', '✧', '✶', '✷', '✸', '✹', '✸', '✷', '✶', '✧']
 // While anything works, Codex's job status is checked every this many ticks (3 s).
 const BUSY_POLL_TICKS = 12
 // The companion subcommands that start a Codex job (not status, result, setup, ...).
@@ -59,9 +76,13 @@ const STARTS_CODEX_JOB = /codex-companion\.mjs"?\s+(task|review|adversarial-revi
 // After a Codex start is seen, "not running" is not trusted for this long: the job may not
 // be registered yet (a background start returns before it is).
 const CODEX_START_GRACE_MS = 20_000
+// The agy plugin's wrapper subcommands that run Gemini (not check or help).
+const STARTS_GEMINI_JOB = /agy-run\.sh"?\s+(ask|review|image)(\s|"|$)/
+const GEMINI_START_GRACE_MS = 20_000
 
 const claudeBusy = atom({ plugin: 'codex-gemini-claude', key: 'claudeBusy' } as const, false)
 const codexBusy = atom({ plugin: 'codex-gemini-claude', key: 'codexBusy' } as const, false)
+const geminiBusy = atom({ plugin: 'codex-gemini-claude', key: 'geminiBusy' } as const, false)
 const frame = atom({ plugin: 'codex-gemini-claude', key: 'frame' } as const, 0)
 // VS Code draws each Svg as an image; one drawn while its window was in the background (a mod
 // reload, say) can stay as its alt text. A new source makes it load again, so there the band
@@ -80,6 +101,10 @@ function codexIcon(isBusy: boolean, n: number): string {
   return isBusy ? (CODEX_GLYPHS[n % CODEX_GLYPHS.length] ?? CODEX_ICON) : CODEX_ICON
 }
 
+function geminiIcon(isBusy: boolean, n: number): string {
+  return isBusy ? (GEMINI_GLYPHS[n % GEMINI_GLYPHS.length] ?? GEMINI_ICON) : GEMINI_ICON
+}
+
 // Fixed widths in cells for the band's columns, so the rows line up whatever
 // the numbers: the row label, then the Claude icon and button.
 const LABEL_WIDTH = 8
@@ -90,6 +115,9 @@ const ICON_WIDTH = 1
 // centered: Claude's on the Context row, Codex's on the Usage row. Gray and still while
 // idle, in color and animated while that model works.
 const SPINNER_WIDTH = 3
+// Models layout: the indicator's slot, its glyph against the slot's right edge, so it sits as
+// close to its rings as the rings sit to each other.
+const GROUP_SPINNER_WIDTH = 2
 // An idle indicator's gray.
 const IDLE_COLOR = '#5C5C5C'
 
@@ -235,6 +263,7 @@ type ContextBlock = { heading: string; color: string; line: string }
 const NAMED = {
   Claude: { icon: CLAUDE_ICON, color: CLAUDE_COLOR },
   Codex: { icon: CODEX_ICON, color: CODEX_COLOR },
+  Gemini: { icon: GEMINI_ICON, color: GEMINI_COLOR },
 } as const
 type Who = keyof typeof NAMED
 
@@ -435,6 +464,16 @@ function codexValue(x: CodexContext | null): string {
   return ok ? `${ok.percent}%` : '—'
 }
 
+function geminiOk(g: GeminiContext | null) {
+  return g && !('error' in g) ? g : null
+}
+
+function geminiValue(g: GeminiContext | null): string {
+  const ok = geminiOk(g)
+
+  return ok ? `${ok.percent}%` : '—'
+}
+
 function contextBlock(who: Who, line: string): ContextBlock {
   const { icon, color } = NAMED[who]
 
@@ -457,6 +496,15 @@ function codexDetails(x: CodexContext | null): ContextBlock {
   }
 
   return contextBlock('Codex', `${ok.model ?? '?'}, ${ok.effort ?? '?'} · ${exact(ok.tokens)} / ${exact(ok.window)} tokens`)
+}
+
+function geminiDetails(g: GeminiContext | null): ContextBlock {
+  const ok = geminiOk(g)
+  if (!ok) {
+    return contextBlock('Gemini', 'no Gemini conversation in this session yet')
+  }
+
+  return contextBlock('Gemini', `${exact(ok.tokens)} / ${exact(ok.window)} tokens`)
 }
 
 async function refreshClaude($: EngineInterface, context: { tokens?: number; window: number; percent?: number }) {
@@ -495,11 +543,13 @@ async function refreshClaudeNow($: EngineInterface) {
   await saveClaudeUsage($, usage.rateLimits)
 }
 
-// A button press: flip its details open or closed, and fetch fresh figures on open.
+// A button press: flip its details open or closed, and fetch fresh figures on open. The fetch
+// runs on its own: a press must finish within its time budget, and the figures redraw the band
+// when they arrive.
 async function toggle($: EngineInterface, isOpen: boolean, flip: () => Promise<unknown>, refresh: () => Promise<unknown>) {
   await flip()
   if (!isOpen) {
-    await refresh().catch(() => undefined)
+    void refresh().catch(() => undefined)
   }
 }
 
@@ -523,6 +573,66 @@ async function refreshCodex($: EngineInterface) {
   await update($, codexBusy, () => running === true || isStarting)
 }
 
+async function refreshGeminiUsage($: EngineInterface) {
+  const run = await $.process.run(['python3', '-I', script($, 'usage-gemini.py'), '--json'], {
+    timeoutMs: 30_000,
+  })
+  if (run.exitCode !== 0) {
+    return
+  }
+  const parsed = JSON.parse(run.stdout) as { windows?: UsageWindow[] }
+  if (!Array.isArray(parsed.windows) || parsed.windows.length === 0) {
+    return
+  }
+  const windows = parsed.windows
+  await update($, geminiUsage, () => windows)
+}
+
+async function refreshGemini($: EngineInterface) {
+  const since = await read($, geminiSince)
+  // Gemini not started from this session yet: nothing to look for.
+  if (since === null) {
+    await update($, gemini, () => ({ error: 'No Gemini conversation in this Claude session yet.' }))
+    await update($, geminiBusy, () => false)
+
+    return
+  }
+  const cwd = await $.session.cwd()
+  const run = await $.process.run(['python3', '-I', script($, 'context-gemini.py'), '--json', '--cwd', cwd, '--since', String(since)], {
+    timeoutMs: 20_000,
+  })
+  if (run.exitCode !== 0) {
+    return
+  }
+  const parsed = JSON.parse(run.stdout) as GeminiContext & { running?: boolean; conversation?: string }
+  const { running, ...context } = parsed
+  if (running === true) {
+    geminiStartedAt = -Infinity
+  }
+  const isStarting = (await $.clock.now()) - geminiStartedAt < GEMINI_START_GRACE_MS
+  const wasBusy = await read($, geminiBusy)
+  const isBusy = running === true || isStarting
+  // Keep the last reading while a new conversation has none yet.
+  if (!('error' in context) || !geminiOk(await read($, gemini))) {
+    await update($, gemini, () => context as GeminiContext)
+  }
+  await update($, geminiBusy, () => isBusy)
+  // A run just ended: its usage has moved.
+  if (wasBusy && !isBusy) {
+    void refreshGeminiUsage($).catch(() => undefined)
+  }
+}
+
+// When Claude last started Gemini (Bash) or a Gemini subagent: epoch ms.
+let geminiStartedAt = -Infinity
+
+async function markGeminiStarting($: EngineInterface) {
+  const now = await $.clock.now()
+  geminiStartedAt = now
+  await update($, geminiSince, () => now)
+  await update($, geminiBusy, () => true)
+}
+
 // When Claude last started a Codex job (Bash) or a Codex subagent: epoch ms.
 let codexStartedAt = -Infinity
 
@@ -538,15 +648,22 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: PANE,
-      description: 'Show Claude and Codex context usage in a pane',
+      description: 'Show Claude, Codex and Gemini context usage in a pane',
     })
     $.clock.every(CODEX_REFRESH_MS, () => {
       void refreshCodex($).catch(() => undefined)
     })
+    $.clock.every(GEMINI_REFRESH_MS, () => {
+      void refreshGemini($).catch(() => undefined)
+    })
+    $.clock.every(GEMINI_USAGE_REFRESH_MS, () => {
+      void refreshGeminiUsage($).catch(() => undefined)
+    })
     let ticks = 0
     $.clock.every(FRAME_MS, () => {
       void (async () => {
-        const isBusy = (await read($, claudeBusy)) || (await read($, codexBusy))
+        const isGeminiBusy = await read($, geminiBusy)
+        const isBusy = (await read($, claudeBusy)) || (await read($, codexBusy)) || isGeminiBusy
         if (!isBusy) {
           return
         }
@@ -554,6 +671,9 @@ export const register: Register = (on, options) => {
         await update($, frame, n => (n + 1) % 1000)
         if (ticks % BUSY_POLL_TICKS === 0) {
           await refreshCodex($)
+          if (isGeminiBusy) {
+            await refreshGemini($)
+          }
         }
       })().catch(() => undefined)
     })
@@ -576,6 +696,8 @@ export const register: Register = (on, options) => {
     }
     await refreshCodex($).catch(() => undefined)
     void refreshCodexUsage($).catch(() => undefined)
+    await refreshGemini($).catch(() => undefined)
+    void refreshGeminiUsage($).catch(() => undefined)
 
     return started
   })
@@ -612,6 +734,35 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // A Bash call that runs Gemini through the agy plugin's wrapper marks Gemini as working at
+  // once. A foreground call is over when it returns; a background one is settled by the checks.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (!STARTS_GEMINI_JOB.test(String(e.command ?? ''))) {
+      return next(e)
+    }
+    await markGeminiStarting($)
+    const result = await next(e)
+    if (e.run_in_background !== true) {
+      geminiStartedAt = -Infinity
+    }
+    void refreshGemini($).catch(() => undefined)
+
+    return result
+  })
+
+  // A Gemini subagent (`agy:runner`) runs the wrapper from inside itself: mark Gemini as
+  // working when it launches.
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    if (!String(e.subagent_type ?? '').startsWith('agy:')) {
+      return next(e)
+    }
+    await markGeminiStarting($)
+    const result = await next(e)
+    void refreshGemini($).catch(() => undefined)
+
+    return result
+  })
+
   // Claude's own turns (not a subagent's) mark Claude as working.
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -635,6 +786,7 @@ export const register: Register = (on, options) => {
     await saveClaudeUsage($, e.rateLimits)
     void refreshCodex($).catch(() => undefined)
     void refreshCodexUsage($).catch(() => undefined)
+    void refreshGemini($).catch(() => undefined)
 
     return next(e)
   })
@@ -642,6 +794,8 @@ export const register: Register = (on, options) => {
   on('command.run', { command: PANE }, async $ => {
     await refreshCodex($).catch(() => undefined)
     await refreshCodexUsage($).catch(() => undefined)
+    await refreshGemini($).catch(() => undefined)
+    await refreshGeminiUsage($).catch(() => undefined)
     await $.ui.open({ id: PANE, title: 'Context' })
 
     return { text: 'Context pane opened.' }
@@ -660,6 +814,10 @@ export const register: Register = (on, options) => {
     const claudeUsageOpen = await read($, isClaudeUsageOpen)
     const cuSeenAt = await read($, claudeUsageSeenAt)
     const codexUsageOpen = await read($, isCodexUsageOpen)
+    const g = await read($, gemini)
+    const gu = await read($, geminiUsage)
+    const geminiOpen = await read($, isGeminiOpen)
+    const geminiUsageOpen = await read($, isGeminiUsageOpen)
     const now = await $.clock.now()
     const offsetMin = (await read($, tzOffset)) ?? 0
     const contexts = [...(claudeOpen ? [claudeDetails(c)] : []), ...(codexOpen ? [codexDetails(x)] : [])]
@@ -743,6 +901,7 @@ export const register: Register = (on, options) => {
     const detailGap = 0
     const isClaudeBusy = e.props.isWorking || (await read($, claudeBusy))
     const isCodexBusy = await read($, codexBusy)
+    const isGeminiBusy = await read($, geminiBusy)
     const n = await read($, frame)
     // The row icons stay still; each row's right-end indicator animates while its model works.
     const claudeSpinner = claudeIcon(true, n)
@@ -757,6 +916,9 @@ export const register: Register = (on, options) => {
         {isCodexBusy ? <Text bold color={CODEX_COLOR}>{codexSpinner}</Text> : <Text color={IDLE_COLOR}>{CODEX_ICON}</Text>}
       </Box>
     )
+    // An indicator's glyph alone: bold in its color while the model works, else gray.
+    const indicatorGlyph = (isBusy: boolean, spinner: string, icon: string, color: string) =>
+      isBusy ? <Text bold color={color}>{spinner}</Text> : <Text color={IDLE_COLOR}>{icon}</Text>
     const refreshCodexUsageNow = async () => {
       await refreshTzOffset($)
       await refreshCodexUsage($)
@@ -790,7 +952,7 @@ export const register: Register = (on, options) => {
     // else its busiest window as text, like the other marks.
     // The rings and the bar take their own width, with no slot around them, so the one gap
     // of the Box holding them is the only space between them: ring to ring, ring to bar.
-    // `mirrored`: Codex's side of the main row runs 1w then 5h; everywhere else, 5h then 1w.
+    // `mirrored` runs 1w then 5h; the row and the details run 5h then 1w.
     const usageRingNodes = (who: Who, windows: UsageWindow[] | null, mirrored = false) => {
       const { icon, color } = NAMED[who]
       if (!Svg) {
@@ -828,67 +990,71 @@ export const register: Register = (on, options) => {
     }
 
     if (layout === 'models') {
-      // One mirrored row: Claude's thinking indicator, usage and context at the left; the
-      // `+` button centered; Codex's context, usage and thinking indicator at the right.
-      // `+` opens every detail above the row; it reads `-` while any is open and closes them all.
-      const isAnyOpen = claudeOpen || codexOpen || claudeUsageOpen || codexUsageOpen
+      // One row of three groups, Claude's, Codex's and Gemini's, each its thinking indicator,
+      // usage rings and context bar; the `+` button at the end. `+` opens every detail above
+      // the row; it reads `-` while any is open and closes them all.
+      const isAnyOpen = claudeOpen || codexOpen || claudeUsageOpen || codexUsageOpen || geminiOpen || geminiUsageOpen
 
-      // Details by model; each heading repeats its bar or ring after it.
-      const claudeContextBlock = claudeDetails(c)
-      const claudeUsageBlock = usageBlock('Claude', cu, now, offsetMin, cuSeenAt)
-      const codexContextBlock = codexDetails(x)
-      const codexUsageBlock = usageBlock('Codex', xu, now, offsetMin)
-      const claudeContext = claudeOpen ? drawContext(claudeContextBlock, Svg && mark('Claude', 'context', claudeValue(c))) : null
-      const claudeUsage = claudeUsageOpen ? drawUsage(claudeUsageBlock, Svg && usageRings('Claude', cu)) : null
-      const codexContext = codexOpen ? drawContext(codexContextBlock, Svg && mark('Codex', 'context', codexValue(x))) : null
-      const codexUsage = codexUsageOpen ? drawUsage(codexUsageBlock, Svg && usageRings('Codex', xu)) : null
+      // Details by model; each heading repeats its bar or rings after it.
+      const claudeContext = claudeOpen ? drawContext(claudeDetails(c), Svg && mark('Claude', 'context', claudeValue(c))) : null
+      const claudeUsage = claudeUsageOpen ? drawUsage(usageBlock('Claude', cu, now, offsetMin, cuSeenAt), Svg && usageRings('Claude', cu)) : null
+      const codexContext = codexOpen ? drawContext(codexDetails(x), Svg && mark('Codex', 'context', codexValue(x))) : null
+      const codexUsage = codexUsageOpen ? drawUsage(usageBlock('Codex', xu, now, offsetMin), Svg && usageRings('Codex', xu)) : null
+      const geminiContext = geminiOpen ? drawContext(geminiDetails(g), Svg && mark('Gemini', 'context', geminiValue(g))) : null
+      const geminiUsageDetail = geminiUsageOpen ? drawUsage(usageBlock('Gemini', gu, now, offsetMin), Svg && usageRings('Gemini', gu)) : null
 
-      // A column per model, in a row that wraps: where both fit, Claude's on the left and Codex's
-      // on the right, so the contexts line up and the usages line up (a context is always two
-      // lines). Narrower, Codex's column wraps below Claude's. Each column keeps its text's own
-      // width (no shrinking), so the wrap follows the surface's font rather than a cell count.
-      // Claude's is at least half the band, so Codex's starts in the middle; its right padding
-      // is the gap when Claude's text is wider than that.
       const setAll = async (open: boolean) => {
         await update($, isClaudeOpen, () => open)
         await update($, isClaudeUsageOpen, () => open)
         await update($, isCodexOpen, () => open)
         await update($, isCodexUsageOpen, () => open)
+        await update($, isGeminiOpen, () => open)
+        await update($, isGeminiUsageOpen, () => open)
       }
+      const refreshAll = () =>
+        Promise.all([refreshClaudeNow($), refreshCodex($), refreshCodexUsageNow(), refreshGemini($), refreshGeminiUsage($)])
+      // A model's group in the row: its indicator, then its rings and bar, all one gap apart.
+      const group = (indicator: RenderChildren, who: Who, windows: UsageWindow[] | null, value: string) => (
+        <Box gap={MARK_GAP} alignItems="center">
+          <Box width={GROUP_SPINNER_WIDTH} justifyContent="flex-end">
+            {indicator}
+          </Box>
+          <Box gap={MARK_GAP} alignItems="center">
+            {usageRingNodes(who, windows)}
+            {contextBar(who, value)}
+          </Box>
+        </Box>
+      )
 
       return (
         <Box flexDirection="column" rowGap={rowGap}>
-          {/* Details by model: Claude's context and usage, then Codex's. */}
-          {/* Each heading repeats its bar or ring after it; the terminal's numbers are in the details. */}
-          {/* The sections sit closer together than the full line that keeps the row's button apart. */}
+          {/* A column per model, in a row that wraps: where all fit, side by side, so the contexts */}
+          {/* line up and the usages line up (a context is always two lines); narrower, they wrap. */}
+          {/* Each column keeps its text's own width and takes at least a third of the band. */}
           {isAnyOpen ? (
             <Box flexWrap="wrap" rowGap={detailGap}>
-              <Box flexDirection="column" flexShrink={0} minWidth="50%" paddingRight={DETAIL_COLUMN_GAP} rowGap={detailGap}>
+              <Box flexDirection="column" flexShrink={0} minWidth="33%" paddingRight={DETAIL_COLUMN_GAP} rowGap={detailGap}>
                 {claudeContext}
                 {claudeUsage}
               </Box>
-              <Box flexDirection="column" flexShrink={0} rowGap={detailGap}>
+              <Box flexDirection="column" flexShrink={0} minWidth="33%" paddingRight={DETAIL_COLUMN_GAP} rowGap={detailGap}>
                 {codexContext}
                 {codexUsage}
+              </Box>
+              <Box flexDirection="column" flexShrink={0} rowGap={detailGap}>
+                {geminiContext}
+                {geminiUsageDetail}
               </Box>
             </Box>
           ) : null}
           <Box gap={1} alignItems="center">
-            {claudeIndicator}
-            <Box gap={MARK_GAP} alignItems="center">
-              {usageRingNodes('Claude', cu)}
-              {contextBar('Claude', claudeValue(c))}
-            </Box>
+            {group(indicatorGlyph(isClaudeBusy, claudeSpinner, CLAUDE_ICON, CLAUDE_COLOR), 'Claude', cu, claudeValue(c))}
             <Box flexGrow={1} />
-            <Button key="expand" label={isAnyOpen ? '-' : '+'} onPress={() =>
-                toggle($, isAnyOpen, () => setAll(!isAnyOpen), () => Promise.all([refreshClaudeNow($), refreshCodex($), refreshCodexUsageNow()]))
-              } />
+            {group(indicatorGlyph(isCodexBusy, codexSpinner, CODEX_ICON, CODEX_COLOR), 'Codex', xu, codexValue(x))}
             <Box flexGrow={1} />
-            <Box gap={MARK_GAP} alignItems="center">
-              {contextBar('Codex', codexValue(x))}
-              {usageRingNodes('Codex', xu, true)}
-            </Box>
-            {codexIndicator}
+            {group(indicatorGlyph(isGeminiBusy, geminiIcon(true, n), GEMINI_ICON, GEMINI_COLOR), 'Gemini', gu, geminiValue(g))}
+            <Box flexGrow={1} />
+            <Button key="expand" label={isAnyOpen ? '-' : '+'} onPress={() => toggle($, isAnyOpen, () => setAll(!isAnyOpen), refreshAll)} />
           </Box>
         </Box>
       )
@@ -1000,8 +1166,10 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const c = await read($, claude)
     const x = await read($, codex)
+    const g = await read($, gemini)
     const cu = await read($, claudeUsage)
     const xu = await read($, codexUsage)
+    const gu = await read($, geminiUsage)
     const now = await $.clock.now()
     const offsetMin = (await read($, tzOffset)) ?? 0
     const { Box, Text } = $.ui.resolve(e)
@@ -1038,14 +1206,15 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Text>
-          Context: <Text color={CLAUDE_COLOR}>{CLAUDE_ICON}</Text> Claude {claudeValue(c)} · <Text color={CODEX_COLOR}>{CODEX_ICON}</Text> Codex {codexValue(x)}
+          Context: <Text color={CLAUDE_COLOR}>{CLAUDE_ICON}</Text> Claude {claudeValue(c)} · <Text color={CODEX_COLOR}>{CODEX_ICON}</Text> Codex {codexValue(x)} · <Text color={GEMINI_COLOR}>{GEMINI_ICON}</Text> Gemini {geminiValue(g)}
         </Text>
-        {[claudeDetails(c), codexDetails(x)].map(drawContext)}
+        {[claudeDetails(c), codexDetails(x), geminiDetails(g)].map(drawContext)}
         <Text>
-          Usage: <Text color={CLAUDE_COLOR}>{CLAUDE_ICON}</Text> Claude {usageValue(cu, now)} · <Text color={CODEX_COLOR}>{CODEX_ICON}</Text> Codex {usageValue(xu, now)}
+          Usage: <Text color={CLAUDE_COLOR}>{CLAUDE_ICON}</Text> Claude {usageValue(cu, now)} · <Text color={CODEX_COLOR}>{CODEX_ICON}</Text> Codex {usageValue(xu, now)} · <Text color={GEMINI_COLOR}>{GEMINI_ICON}</Text> Gemini {usageValue(gu, now)}
         </Text>
         {drawUsage(usageBlock('Claude', cu, now, offsetMin, await read($, claudeUsageSeenAt)))}
         {drawUsage(usageBlock('Codex', xu, now, offsetMin))}
+        {drawUsage(usageBlock('Gemini', gu, now, offsetMin))}
       </Box>
     )
   })

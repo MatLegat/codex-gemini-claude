@@ -10,6 +10,15 @@ const CODEX = {
   updatedAt: 0,
 }
 
+const GEMINI = { conversation: 'b4e2528', tokens: 52_429, window: 1_048_576, percent: 5, updatedAt: 0 }
+
+const GEMINI_USAGE = {
+  windows: [
+    { name: '5h', percent: 40, resetsAt: 120_000 + 3 * 3_600_000 },
+    { name: 'Weekly', percent: 10, resetsAt: 120_000 + 6 * 86_400_000 },
+  ],
+}
+
 const CODEX_USAGE = {
   windows: [
     { name: '5h', percent: 81, resetsAt: 120_000 + 2 * 3_600_000 },
@@ -47,7 +56,7 @@ async function glyphs(ui: Parameters<typeof lines>[0]): Promise<string[]> {
 // An image as `Claude 12%`: whose it is, by its color (none: an empty mark), and its alt, the percentage alone.
 type SvgNode = { props: { alt: string; source: string } }
 const svgLabel = (r: SvgNode) => {
-  const who = r.props.source.includes('#D97757') ? 'Claude' : r.props.source.includes('#10A39F') ? 'Codex' : 'empty'
+  const who = r.props.source.includes('#D97757') ? 'Claude' : r.props.source.includes('#10A39F') ? 'Codex' : r.props.source.includes('#3487FF') ? 'Gemini' : 'empty'
 
   return `${who} ${r.props.alt}`
 }
@@ -200,8 +209,8 @@ test('band and pane show Claude and Codex usage', { options: { layout: 'buttons'
 
   for (const surface of ['terminal', 'desktop', 'vscode'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /^Context/ }))?.text).toBe('Context: ✻ Claude 25% · ❂ Codex 19%')
-    expect((await ui.find({ type: 'Text', text: /^Usage/ }))?.text).toBe('Usage: ✻ Claude 5h 12% · wk 31% · ❂ Codex 5h 81% · wk 64%')
+    expect((await ui.find({ type: 'Text', text: /^Context/ }))?.text).toBe('Context: ✻ Claude 25% · ❂ Codex 19% · ✦ Gemini —')
+    expect((await ui.find({ type: 'Text', text: /^Usage/ }))?.text).toBe('Usage: ✻ Claude 5h 12% · wk 31% · ❂ Codex 5h 81% · wk 64% · ✦ Gemini —')
     expect(await ui.find({ type: 'Text', text: /thread/ })).toBeUndefined()
     await ui.unmount()
   }
@@ -262,7 +271,7 @@ test('a session with no reading yet shows the last saved Claude usage', { option
 
   const ui = await $.ui.mount({ ...PANE, surface: 'vscode' })
   // The 5h window reset since that reading, so it shows no number.
-  expect((await ui.find({ type: 'Text', text: /^Usage/ }))?.text).toBe('Usage: ✻ Claude 5h — · wk 55% · ❂ Codex —')
+  expect((await ui.find({ type: 'Text', text: /^Usage/ }))?.text).toBe('Usage: ✻ Claude 5h — · wk 55% · ❂ Codex — · ✦ Gemini —')
   expect(await block(ui, '✻ Claude usage (last reading 2h0m ago)')).toEqual([
     '✻ Claude usage (last reading 2h0m ago)',
     '—',
@@ -547,7 +556,7 @@ test('rings layout: Context and Usage buttons open both models, then rings only'
   // Two buttons, no per-model buttons; the rings carry the numbers.
   expect((await ui.findAll({ type: 'Button' })).map(b => b.text)).toEqual(['Context', 'Usage'])
   const alts = async () => ((await ui.findAll({ type: 'Svg' })) as unknown as SvgNode[]).map(svgLabel)
-  expect(await alts()).toEqual(['Claude 25%', 'Codex 19%', 'Claude 12%', 'empty —'])
+  expect(await alts()).toEqual(['Claude 25%', 'Codex 19%', 'Claude 12%', 'Codex 81%'])
   // Context is a pill bar, usage a ring.
   const shapes = ((await ui.findAll({ type: 'Svg' })) as unknown as { props: { source: string } }[]).map(r => (r.props.source.includes('<rect') ? 'bar' : 'ring'))
   expect(shapes).toEqual(['bar', 'bar', 'ring', 'ring'])
@@ -586,7 +595,7 @@ test('rings layout: Context and Usage buttons open both models, then rings only'
   await term.unmount()
 })
 
-test('models layout (default): one mirrored row, Claude left, +/- centered, Codex right', async ($, on) => {
+test('models layout (default): Claude, Codex and Gemini groups, then the +/- button', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('command.register', () => ({ value: { command: 'context-all' } }))
   const clock = mock.clock(on, { now: 120_000 })
@@ -600,26 +609,37 @@ test('models layout (default): one mirrored row, Claude left, +/- centered, Code
   }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.id', () => ({ value: 'claude-session-1' }))
+  on('session.cwd', () => ({ value: '/work/repo' }))
   on('env.get', () => ({ value: '/Users/test' }))
-  const scripts: string[] = []
+  const scripts: string[][] = []
+  let geminiRunning = false
   on('process.run', (_, e) => {
     if (e.argv[0] === 'python3') {
-      scripts.push(e.argv[2] ?? '')
+      scripts.push(e.argv.slice(2))
     }
     if (e.argv[0] === 'date') {
       return runResult('-0300\n')
     }
+    const name = e.argv[2]?.split('/').pop()
+    const answers: Record<string, unknown> = {
+      'usage-codex.py': CODEX_USAGE,
+      'context-gemini.py': { ...GEMINI, running: geminiRunning },
+      'usage-gemini.py': GEMINI_USAGE,
+    }
 
-    return runResult(JSON.stringify(e.argv.some(a => a.includes('usage-codex')) ? CODEX_USAGE : CODEX))
+    return runResult(JSON.stringify(answers[name ?? ''] ?? CODEX))
   })
+  on('tool.call', () => ({ result: {} }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  // The Codex scripts run from the mod's own folder, not from the user's home.
-  expect(scripts.length).toBeGreaterThan(0)
-  expect(scripts.every(path => path.startsWith('/') && /\/scripts\/(context|usage)-codex\.py$/.test(path) && !path.startsWith('/Users/test/.claude/'))).toBe(true)
-  expect(new Set(scripts.map(path => path.split('/').pop()))).toEqual(new Set(['context-codex.py', 'usage-codex.py']))
+  // Usage loads in the background at start: let it land.
+  await clock.advance(10)
+  // The scripts run from the mod's own folder, not from the user's home. Gemini's context
+  // script waits for Gemini to be started from this session.
+  const paths = scripts.map(s => s[0] ?? '')
+  expect(paths.every(path => path.startsWith('/') && /\/scripts\/[a-z-]+\.py$/.test(path) && !path.startsWith('/Users/test/.claude/'))).toBe(true)
+  expect(new Set(paths.map(path => path.split('/').pop()))).toEqual(new Set(['context-codex.py', 'usage-codex.py', 'usage-gemini.py']))
 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  // Collapsed: one `+` button, no labels; Claude's thinking, usage and context, then Codex's context, usage and thinking.
   expect((await ui.findAll({ type: 'Button' })).map(b => b.text)).toEqual(['+'])
   expect(await lines(ui)).not.toContain('Context:')
   const svgs = async () => ((await ui.findAll({ type: 'Svg' })) as unknown as SvgNode[])
@@ -628,60 +648,82 @@ test('models layout (default): one mirrored row, Claude left, +/- centered, Code
 
       return `${svgLabel(r)} ${window ? `${window} ring` : r.props.source.includes('<rect') ? 'bar' : 'ring'}`
     })
-  // Usage is two rings per model, each named in its middle: Claude's 5h then 1w, Codex's mirrored,
-  // 1w then 5h. Claude has no weekly reading here.
-  // A ring with a reading shows the time to its reset (Claude's 5h resets in 90 min: `1h`);
-  // one without shows its window's name.
-  expect(await svgs()).toEqual(['Claude 12% 1h ring', 'empty — 1w ring', 'Claude 25% bar', 'Codex 19% bar', 'empty — 1w ring', 'empty — 5h ring'])
+  // Each group: the 5h ring, the 1w ring, the context bar. A ring with a reading shows the time to
+  // its reset, rounded down (Claude's 5h in 90 min: `1h`); one without shows its window's name. Gemini has
+  // usage but no conversation from this session yet: an empty bar.
+  expect(await svgs()).toEqual([
+    'Claude 12% 1h ring', 'empty — 1w ring', 'Claude 25% bar',
+    'Codex 81% 1h ring', 'Codex 64% 4d ring', 'Codex 19% bar',
+    'Gemini 40% 2h ring', 'Gemini 10% 5d ring', 'empty — bar',
+  ])
   // The weekly ring's line is thicker than the 5h one's.
   const strokes = ((await ui.findAll({ type: 'Svg' })) as unknown as SvgNode[]).flatMap(r => {
     const window = /<text[^>]*>([^<]+)<\/text>/.exec(r.props.source)?.[1]
 
     return window ? [`${window} ${/stroke-width="([\d.]+)"/.exec(r.props.source)?.[1]}`] : []
   })
-  expect(strokes).toEqual(['1h 0.75', '1w 1.5', '1w 1.5', '5h 0.75'])
-  // A label's color follows its window's usage: gray below 50%, and with no reading.
+  expect(strokes).toEqual(['1h 0.75', '1w 1.5', '1h 0.75', '4d 1.5', '2h 0.75', '5d 1.5'])
+  // A label's color follows its window's usage: gray below 50% and with no reading, grayish
+  // yellow from 50%, amber from 70%.
   const labelColors = async () =>
     ((await ui.findAll({ type: 'Svg' })) as unknown as SvgNode[]).flatMap(r => /fill="(#[0-9A-F]+)">([^<]+)<\/text>/.exec(r.props.source)?.slice(1, 3).reverse().join(' ') ?? [])
-  expect(await labelColors()).toEqual(['1h #8E8E8E', '1w #8E8E8E', '1w #8E8E8E', '5h #8E8E8E'])
+  expect(await labelColors()).toEqual(['1h #8E8E8E', '1w #8E8E8E', '1h #D9A13B', '4d #A89B6A', '2h #8E8E8E', '5d #8E8E8E'])
   // The time counts down, redrawn once a minute: 31 minutes on, Claude's 5h shows `59m`, in the
   // smaller size three characters need.
   await clock.advance(31 * 60_000)
   const claude5h = ((await ui.findAll({ type: 'Svg' })) as unknown as SvgNode[])[0]?.props.source ?? ''
   expect(claude5h).toContain('>59m</text>')
   expect(claude5h).toContain('font-size="4"')
-  // One row: the indicators at its two ends, the button between the marks.
-  const row = (await ui.findAll({ type: 'Box' }))[1] as unknown as { props: { children?: unknown }; children: { type: string; key?: string; props: { flexGrow?: number } }[] }
-  expect(row.children.map(n => n.key ?? (n.props.flexGrow ? 'grow' : n.type))).toEqual(['Box', 'Box', 'grow', 'Button', 'grow', 'Box', 'Box'])
-  // Each model's marks share one Box and one gap, with no slot around them: even spacing.
-  const groups = [row.children[1], row.children[5]] as unknown as { props: { gap?: string }; children: { type: string }[] }[]
-  expect(groups.map(g => [g.props.gap, g.children.map(n => n.type).join(',')])).toEqual([['xs', 'Svg,Svg,Svg'], ['xs', 'Svg,Svg,Svg']])
-  expect(await indicators(ui)).toEqual(['✻#5C5C5C', '❂#5C5C5C'])
+
+  // One row: three groups spread out, the button at the end.
+  type RowNode = { type: string; key?: string; props: { flexGrow?: number; gap?: string | number; width?: number }; children: RowNode[] }
+  const row = (await ui.findAll({ type: 'Box' }))[1] as unknown as RowNode
+  expect(row.children.map(n => n.key ?? (n.props.flexGrow ? 'grow' : n.type))).toEqual(['Box', 'grow', 'Box', 'grow', 'Box', 'grow', 'Button'])
+  // Each group: its indicator, then its marks sharing one gap with no slot around them.
+  const groups = [row.children[0], row.children[2], row.children[4]] as RowNode[]
+  // The indicator sits in a two-cell slot, as close to its rings as the rings are to each other.
+  expect(groups.map(g => [g.props.gap, g.children[0]?.props.width])).toEqual([['xs', 2], ['xs', 2], ['xs', 2]])
+  expect(groups.map(g => g.children[1]?.props.gap)).toEqual(['xs', 'xs', 'xs'])
+  expect(groups.map(g => g.children[1]?.children.map(n => n.type).join(','))).toEqual(['Svg,Svg,Svg', 'Svg,Svg,Svg', 'Svg,Svg,Svg'])
+  expect((await glyphs(ui)).slice(0, 3)).toEqual(['✻#5C5C5C', '❂#5C5C5C', '✦#5C5C5C'])
+
+  // A Gemini subagent launching marks Gemini as working: its indicator animates in its color,
+  // and its conversation is looked up from this session's start on.
+  geminiRunning = true
+  await $.tool.call({ tool: 'Agent', subagent_type: 'agy:runner', description: 'ask', prompt: 'hi' })
+  await clock.advance(250)
+  const geminiGlyph = (await glyphs(ui))[2] ?? ''
+  expect(geminiGlyph.endsWith('#3487FF*')).toBe(true)
+  const lookup = scripts.find(s => s[0]?.endsWith('context-gemini.py'))
+  expect(lookup?.slice(1)).toEqual(['--json', '--cwd', '/work/repo', '--since', String(120_000 + 10 + 31 * 60_000)])
+  expect((await svgs())[8]).toBe('Gemini 5% bar')
+  // Once its run is seen to end, Gemini settles.
+  geminiRunning = false
+  await clock.advance(3000)
+  expect((await glyphs(ui))[2]).toBe('✦#5C5C5C')
 
   // `+` opens everything, by model, and turns into `-`.
   await ui.press({ key: 'expand' })
   expect((await ui.find({ key: 'expand' }))?.text).toBe('-')
   const shown = (await lines(ui)).filter(l => / (context|usage)$/.test(l))
-  // The details open above the row: every heading comes before the row's indicators.
   const all = await lines(ui)
-  expect(all.indexOf('❂ Codex usage')).toBeLessThan(all.indexOf('✻'))
-  // A column per model, in order; the surface wraps Codex's below Claude's when they don't fit.
-  expect(shown).toEqual(['✻ Claude context', '✻ Claude usage', '❂ Codex context', '❂ Codex usage'])
+  // The details open above the row: every heading comes before the row's indicators.
+  expect(all.indexOf('✦ Gemini usage')).toBeLessThan(all.indexOf('✻'))
+  expect(shown).toEqual(['✻ Claude context', '✻ Claude usage', '❂ Codex context', '❂ Codex usage', '✦ Gemini context', '✦ Gemini usage'])
+  expect(all).toContain('52,429 / 1,048,576 tokens')
   type Node = { type: string; props: { flexWrap?: string; width?: number; minWidth?: string; flexShrink?: number }; children: Node[] }
   const wrap = ((await ui.findAll({ type: 'Box' })) as unknown as Node[]).find(b => b.props.flexWrap === 'wrap')
-  // Two columns sized by their own text, never shrunk; Claude's takes at least half, so Codex's starts mid-band.
-  expect(wrap?.children.map(c => [c.props.width, c.props.minWidth, c.props.flexShrink])).toEqual([[undefined, '50%', 0], [undefined, undefined, 0]])
+  // Three columns sized by their own text, never shrunk; the first two take at least a third each.
+  expect(wrap?.children.map(c => [c.props.width, c.props.minWidth, c.props.flexShrink])).toEqual([[undefined, '33%', 0], [undefined, '33%', 0], [undefined, undefined, 0]])
   // Each heading is followed by its bar or its two rings, then the row's marks.
-  expect((await svgs()).slice(0, 6)).toEqual(['Claude 25% bar', 'Claude 12% 59m ring', 'empty — 1w ring', 'Codex 19% bar', 'Codex 81% 1h ring', 'Codex 64% 4d ring'])
-  // Codex's 5h at 81% is amber (70%+); its 1w at 64% grayish yellow (50%+).
-  // The expanded headings keep 5h then 1w for both models; only the main row mirrors Codex's.
-  expect((await labelColors()).slice(2, 4)).toEqual(['1h #D9A13B', '4d #A89B6A'])
-  // Mirroring is off (MIRROR_CODEX): both bars fill from the left, both rings run clockwise.
-  const sources = ((await ui.findAll({ type: 'Svg' })) as unknown as { props: { source: string } }[]).slice(0, 6).map(r => r.props.source)
-  expect(sources[0]).toContain('<rect x="0" width')
+  expect((await svgs()).slice(0, 9)).toEqual([
+    'Claude 25% bar', 'Claude 12% 58m ring', 'empty — 1w ring',
+    'Codex 19% bar', 'Codex 81% 1h ring', 'Codex 64% 4d ring',
+    'Gemini 5% bar', 'Gemini 40% 2h ring', 'Gemini 10% 5d ring',
+  ])
+  const sources = ((await ui.findAll({ type: 'Svg' })) as unknown as { props: { source: string } }[]).slice(0, 9).map(r => r.props.source)
   // The fill is exactly its share of the bar: 25% of 21px is 5.25px, clipped to the pill.
   expect(sources[0]).toContain('width="5.25" height="7" fill="#D97757" clip-path="url(#pill)"')
-  expect(sources[3]).toContain('<rect x="0" width')
   expect(sources.some(src => src.includes('matrix(-1'))).toBe(false)
 
   // `-` closes everything.
