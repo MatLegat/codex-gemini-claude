@@ -676,13 +676,13 @@ test('models layout (default): Claude, Codex and Gemini groups, then the +/- but
   expect(claude5h).toContain('font-size="4"')
 
   // One row: three groups spread out, the button at the end.
-  type RowNode = { type: string; key?: string; props: { flexGrow?: number; gap?: string | number; width?: number }; children: RowNode[] }
+  type RowNode = { type: string; key?: string; props: { flexGrow?: number; gap?: string | number; width?: number; justifyContent?: string }; children: RowNode[] }
   const row = (await ui.findAll({ type: 'Box' }))[1] as unknown as RowNode
   expect(row.children.map(n => n.key ?? (n.props.flexGrow ? 'grow' : n.type))).toEqual(['Box', 'grow', 'Box', 'grow', 'Box', 'grow', 'Button'])
   // Each group: its indicator, then its marks sharing one gap with no slot around them.
   const groups = [row.children[0], row.children[2], row.children[4]] as RowNode[]
-  // The indicator sits in a two-cell slot, as close to its rings as the rings are to each other.
-  expect(groups.map(g => [g.props.gap, g.children[0]?.props.width])).toEqual([['xs', 2], ['xs', 2], ['xs', 2]])
+  // The indicator is centered in a two-cell slot, so glyphs of different widths share a center.
+  expect(groups.map(g => [g.props.gap, g.children[0]?.props.width, g.children[0]?.props.justifyContent])).toEqual([['xs', 2, 'center'], ['xs', 2, 'center'], ['xs', 2, 'center']])
   expect(groups.map(g => g.children[1]?.props.gap)).toEqual(['xs', 'xs', 'xs'])
   expect(groups.map(g => g.children[1]?.children.map(n => n.type).join(','))).toEqual(['Svg,Svg,Svg', 'Svg,Svg,Svg', 'Svg,Svg,Svg'])
   expect((await glyphs(ui)).slice(0, 3)).toEqual(['✻#5C5C5C', '❂#5C5C5C', '✦#5C5C5C'])

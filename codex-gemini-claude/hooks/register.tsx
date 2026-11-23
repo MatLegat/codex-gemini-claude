@@ -115,8 +115,8 @@ const ICON_WIDTH = 1
 // centered: Claude's on the Context row, Codex's on the Usage row. Gray and still while
 // idle, in color and animated while that model works.
 const SPINNER_WIDTH = 3
-// Models layout: the indicator's slot, its glyph against the slot's right edge, so it sits as
-// close to its rings as the rings sit to each other.
+// Models layout: the indicator's slot, its glyph centered in it, so glyphs of different widths
+// (spinner frames, each model's icon) all sit on the same center line.
 const GROUP_SPINNER_WIDTH = 2
 // An idle indicator's gray.
 const IDLE_COLOR = '#5C5C5C'
@@ -1016,7 +1016,7 @@ export const register: Register = (on, options) => {
       // A model's group in the row: its indicator, then its rings and bar, all one gap apart.
       const group = (indicator: RenderChildren, who: Who, windows: UsageWindow[] | null, value: string) => (
         <Box gap={MARK_GAP} alignItems="center">
-          <Box width={GROUP_SPINNER_WIDTH} justifyContent="flex-end">
+          <Box width={GROUP_SPINNER_WIDTH} justifyContent="center">
             {indicator}
           </Box>
           <Box gap={MARK_GAP} alignItems="center">
