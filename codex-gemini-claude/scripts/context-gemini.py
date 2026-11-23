@@ -3,9 +3,9 @@
 Usage: context-gemini.py --cwd <folder> --since <epoch ms> [--json]
 
 The Antigravity CLI records no Claude session, so the conversation is the newest one written
-since <since>, the last time this Claude session started Gemini. Print-mode runs (how the agy
-plugin runs Gemini) often have no folder in the CLI's metadata, so a conversation is left out
-only when the metadata names a different folder.
+since <since>, the last time this Claude session started Gemini, in <folder>. Print-mode runs
+(how the agy plugin runs Gemini) often have no folder in the CLI's metadata, so their folder is
+read from the conversation itself: the folder its recorded `file://` paths name most.
 
 Context comes from `agy acp`: loading a conversation sends a `usage_update` with tokens used
 and the window size. Loading is safe only while nothing runs in that conversation, so it
@@ -15,11 +15,13 @@ happens only when Gemini is idle, one load at a time, and once per change of the
 import fcntl
 import json
 import os
+import re
 import select
 import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from urllib.parse import unquote
 
 HOME = os.path.expanduser("~")
@@ -62,19 +64,59 @@ def is_held(conversation):
         return False
 
 
-def print_runs():
-    """Live `agy -p` runs (not `/usage`), whatever folder they run in."""
+def cwd_of(pid):
     try:
-        out = subprocess.run(["ps", "-axo", "command"], capture_output=True, text=True, timeout=5).stdout
+        out = subprocess.run(["lsof", "-a", "-p", pid, "-d", "cwd", "-Fn"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return None
+    names = [line[1:] for line in out.splitlines() if line.startswith("n")]
+    return real(names[0]) if names else None
+
+
+def print_runs(folder):
+    """Live `agy -p` runs (not `/usage`) working in <folder>: another session's run elsewhere
+    is not this one's."""
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
     except Exception:
         return False
     for line in out.splitlines():
         words = line.split()
-        if not words or os.path.basename(words[0]) not in ("agy", "antigravity"):
+        if len(words) < 2 or os.path.basename(words[1]) not in ("agy", "antigravity"):
             continue
         if any(w in ("-p", "--print", "--prompt") for w in words) and "/usage" not in words:
-            return True
+            if cwd_of(words[0]) == folder:
+                return True
     return False
+
+
+FILE_URI = re.compile(rb"file://(/[^\s\"'<>\x00-\x1f]+)")
+
+
+def recorded_root(cid, depth):
+    """The folder a conversation's own data names most, cut to <depth> path parts, or None."""
+    counts = Counter()
+    for suffix in (".db", ".db-wal"):
+        try:
+            data = open(f"{CONVERSATIONS}/{cid}{suffix}", "rb").read()
+        except Exception:
+            continue
+        for match in FILE_URI.finditer(data):
+            parts = unquote(match.group(1).decode("utf-8", "replace")).split("/")
+            if len(parts) > depth:
+                counts["/".join(parts[: depth + 1])] += 1
+    return counts.most_common(1)[0][0] if counts else None
+
+
+def written_at(cid):
+    """When a conversation was last written: its database or its write-ahead log."""
+    times = []
+    for suffix in (".db", ".db-wal"):
+        try:
+            times.append(os.stat(f"{CONVERSATIONS}/{cid}{suffix}").st_mtime)
+        except Exception:
+            pass
+    return int(max(times) * 1000) if times else 0
 
 
 def recorded_folders():
@@ -93,6 +135,7 @@ def recorded_folders():
 
 def conversation_for(folder, since):
     recorded = recorded_folders()
+    depth = len(folder.split("/")) - 1
     found = []
     try:
         names = os.listdir(CONVERSATIONS)
@@ -102,16 +145,20 @@ def conversation_for(folder, since):
         if not name.endswith(".db"):
             continue
         cid = name[:-3]
-        try:
-            stat = os.stat(f"{CONVERSATIONS}/{name}")
-        except Exception:
-            continue
-        updated = int(stat.st_mtime * 1000)
+        updated = written_at(cid)
         if updated < since - SINCE_SLACK_MS:
             continue
-        if recorded.get(cid) and folder not in recorded[cid]:
+        # The metadata's folder when it has one, else the folder the conversation names most.
+        if recorded.get(cid):
+            if folder not in recorded[cid]:
+                continue
+        elif recorded_root(cid, depth) != folder:
             continue
-        found.append({"id": cid, "updatedAt": updated, "steps": stat.st_size})
+        try:
+            size = os.stat(f"{CONVERSATIONS}/{name}").st_size
+        except Exception:
+            size = 0
+        found.append({"id": cid, "updatedAt": updated, "steps": size})
     if not found:
         return None
     # Each `agy -p` starts a new conversation: prefer one still running, then the newest.
@@ -223,7 +270,7 @@ def main():
         done({"error": "No Gemini conversation in this Claude session yet.", "running": False},
              "No Gemini conversation in this Claude session yet.")
     conversation = conversation_for(folder, int(since))
-    running = print_runs() or bool(conversation and is_held(conversation["id"]))
+    running = print_runs(folder) or bool(conversation and is_held(conversation["id"]))
     if not conversation:
         done({"error": "No Gemini conversation in this Claude session yet.", "running": running},
              "No Gemini conversation in this Claude session yet.")
